@@ -61,11 +61,6 @@ class global_pure(threading.Thread):
         self.waypoint_real_path = rospy.get_param('wpt_path', '../f1tenth_ws/src/car_duri/wp_vegas_test.csv')
         self.waypoint_delimeter = rospy.get_param('wpt_delimeter', ',')
 
-        self.time_data_file_name = "odg_pf_pp_time_data5"
-        self.time_data_path = rospy.get_param("time_data_path", "/home/lab/f1tenth_ws/src/car_duri/recording/fgm_gnu_time_data.csv")
-        self.time_data = open(f"{self.time_data_path}/{self.time_data_file_name}.csv", "w", newline="")
-        self.time_data_writer = csv.writer(self.time_data)
-
         self.trj_path = rospy.get_param("trj_path", "")
         self.time_data_path = rospy.get_param("time_data_path", "")
 
@@ -105,7 +100,6 @@ class global_pure(threading.Thread):
         while True:
             sensor_data = self.global_od_q.get()
             
-
             self.current_position = [sensor_data[0][0], sensor_data[0][1], sensor_data[0][2]]
             self.current_speed = sensor_data[0][3]
             
@@ -118,6 +112,8 @@ class global_pure(threading.Thread):
             self.t_loop = sensor_data[4][0]
             self.tn0 = sensor_data[4][1]
             self.tn1 = sensor_data[4][2]
+
+            self.time_data_writer = sensor_data[5]
 
             self.find_path()
             steer  = self.setSteeringAngle()
@@ -214,11 +210,6 @@ class local_fgm(threading.Thread):
         self.scan_range = 0
         self.desired_wp_rt = [0,0]
 
-        self.time_data_file_name = "odg_pf_pp_time_data5"
-        self.time_data_path = rospy.get_param("time_data_path", "/home/lab/f1tenth_ws/src/car_duri/recording/fgm_gnu_time_data.csv")
-        self.time_data = open(f"{self.time_data_path}/{self.time_data_file_name}.csv", "w", newline="")             
-        self.time_data_writer = csv.writer(self.time_data)
-
         self.waypoint_real_path = rospy.get_param('wpt_path', '../f1tenth_ws/src/car_duri/wp_vegas_test.csv')
         self.waypoint_delimeter = rospy.get_param('wpt_delimeter', ',')
         
@@ -303,6 +294,8 @@ class local_fgm(threading.Thread):
             self.t_loop = sensor_data[4][0]
             self.tn0 = sensor_data[4][1]
             self.tn1 = sensor_data[4][2]
+
+            self.time_data_writer = sensor_data[5]
             
             obstacles = self.define_obstacles(self.scan_origin)
             #print(len(obstacles))
@@ -525,6 +518,12 @@ class Obstacle_detect(threading.Thread):
         self.scan_topic = rospy.get_param("scan_topic", "/scan")
         self.marker_topic = rospy.get_param("marker_topic", "/marker")
 
+        self.time_data_file_name = "odg_pf_pp_time_data"
+        self.time_data_path = rospy.get_param("time_data_path")
+        self.time_data = open(f"{self.time_data_path}/{self.time_data_file_name}.csv", "w", newline="")             
+        self.time_data_writer = csv.writer(self.time_data)
+        self.time_data_writer.writerow("index","time","exe_time")
+
         self.waypoint_real_path = rospy.get_param('wpt_path', '../f1tenth_ws/src/car_duri/wp_vegas_test.csv')
         self.waypoint_delimeter = rospy.get_param('wpt_delimeter', ',')
 
@@ -561,6 +560,30 @@ class Obstacle_detect(threading.Thread):
         self.marker_pub = rospy.Publisher(self.marker_topic, Marker, queue_size=10)
         rospy.Subscriber(self.scan_topic, LaserScan, self.subCallback_od, queue_size=10)
         rospy.Subscriber(self.odom_topic, Odometry, self.Odome, queue_size = 10)
+
+         # FOR TRAJECTORY LOGGING
+        rospy.Subscriber("/race_info",RaceInfo,self.update_race_info,queue_size=10)
+        self.tr_flag = rospy.get_param('logging',False)
+        trj_path = rospy.get_param('trj_path')
+        
+        self.race_info = None
+        self.lap = 0
+
+        self.logging_idx = 0
+        self.race_time = 0
+        self.t_start = 0
+
+        if self.tr_flag:
+            self.trajectory = open(trj_path,'w')
+    
+    def update_race_info(self,race_info):
+
+        self.race_info = race_info
+        self.race_time = race_info.ego_elapsed_time
+
+        if self.race_info.ego_lap_count > self.lap:
+            print('lap_count',self.race_info.ego_lap_count,'elapsed_time',self.race_info.ego_elapsed_time,'collision',self.race_info.ego_collision)
+            self.lap += 1
     
     def Odome(self, odom_msg):
         # print("11")
@@ -616,7 +639,6 @@ class Obstacle_detect(threading.Thread):
                 break
             wp_index_temp += 1
 
-
         marker = Marker()
         marker.header.frame_id = "map"
         marker.header.stamp = rospy.Time.now()
@@ -648,12 +670,6 @@ class Obstacle_detect(threading.Thread):
     
     def get_waypoint(self):
         file_wps = np.genfromtxt(self.waypoint_real_path, delimiter=self.waypoint_delimeter, dtype='float')
-        """
-        #file_wps = np.genfromtxt('../f1tenth_ws/src/car_duri/wp_vegas.csv',delimiter=',',dtype='float')
-        file_wps = np.genfromtxt('../f1tenth_ws/src/car_duri/wp_obsmap2.csv',delimiter=',',dtype='float')
-        # file_wps = np.genfromtxt('../f1tenth_ws/src/car_duri/wp_floor8.csv',delimiter=',',dtype='float')
-        # file_wps = np.genfromtxt('../f1tenth_ws/src/car_duri/wp_vegas_test.csv',delimiter=',',dtype='float')
-        """
         temp_waypoint = []
         for i in file_wps:
             wps_point = [i[0],i[1],0]
@@ -810,8 +826,22 @@ class Obstacle_detect(threading.Thread):
             else:
                 self.obs= True
                 break
+    
+    def trajectory_logging(self):
+        self.race_time = time.time() - self.t_start
+        if self.logging_idx <= self.wp_index_current:
+            self.trajectory.write(f"{self.race_time},")
+            self.trajectory.write(f"{self.current_position[0]},")
+            self.trajectory.write(f"{self.current_position[1]},")
+            self.trajectory.write(f"{self.current_position[2]},")
+            self.trajectory.write(f"{self.current_speed}\n")
+            
+            self.logging_idx += 1
+        else:
+            pass
                 
     def run(self):
+        self.t_start = time.time()
         t0 = time.time()
         loop = 0
 
@@ -820,8 +850,10 @@ class Obstacle_detect(threading.Thread):
             if self.scan_range == 0: continue
             loop += 1
             t1 = time.time()
-
+            
             self.obs_dect()
+            if self.tr_flag:
+                self.trajectory_logging()
 
             self.find_nearest_wp()
             self.get_lookahead_desired()
@@ -830,18 +862,22 @@ class Obstacle_detect(threading.Thread):
                 self.transformed_desired_point = self.transformPoint(self.current_position, self.desired_point)
                 self.transformed_desired_point = self.xyt2rt(self.transformed_desired_point)
             # self.transformed_desired_point = self.xyt2rt(self.transformed_desired_point)
-                sensor_data = [self.current_position, self.lidar_data, self.transformed_desired_point, self.actual_lookahead, [loop, t0, t1]]
+                sensor_data = [self.current_position, self.lidar_data, self.transformed_desired_point, self.actual_lookahead, [loop, t0, t1], self.time_data_writer]
                 # if self.local_od_q.full():
                 #     self.local_od_q.get()
                 self.local_od_q.put(sensor_data)
             else:
                 self.transformed_desired_point = self.transformPoint(self.current_position, self.desired_point)
             # self.transformed_desired_point = self.xyt2rt(self.transformed_desired_point)
-                sensor_data = [self.current_position, self.lidar_data, self.transformed_desired_point, self.actual_lookahead, [loop, t0, t1]]
+                sensor_data = [self.current_position, self.lidar_data, self.transformed_desired_point, self.actual_lookahead, [loop, t0, t1], self.time_data_writer]
                 if self.global_od_q.full():
                     self.global_od_q.get()
                 self.global_od_q.put(sensor_data)
             rate.sleep()
+        
+        if self.tr_flag:
+            print(self.race_time)
+            self.trajectory.close()
 
 if __name__ == '__main__':
     rospy.init_node("driver_odg_pf_pp")
